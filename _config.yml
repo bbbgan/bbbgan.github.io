@@ -5,7 +5,7 @@ baseurl:
 url: https://bbbgan.github.io/
 date_format: "ordinal"
 title: bbbGan
-subtitle: "waiting for fill"
+subtitle: "If you don't know, now you know"
 description: "bbbgan's personal blog"
 
 encoding: "utf-8"
