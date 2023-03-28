@@ -8,7 +8,7 @@ keywords: cpp
 
 
 # 引言
-> *lambda*表达式也叫做匿名表达式，是纯右值表达式，它的类型是独有的无名非联合非聚合类类型，被称为*闭包类型*（*closure type*），因此*lambda*表达式的类型并不是`function`，常用的格式：**[ captures ] ( params ) specs requires ﻿(optional) { body }**，更多用法参考 [cppreference.com](https://en.cppreference.com/w/cpp/language/lambda)，
+*lambda*表达式也叫做匿名表达式，是纯右值表达式，它的类型是独有的无名非联合非聚合类类型，被称为*闭包类型*（*closure type*），因此*lambda*表达式的类型并不是`function`，常用的格式：**[ captures ] ( params ) specs requires ﻿(optional) { body }**，更多用法参考 [cppreference.com](https://en.cppreference.com/w/cpp/language/lambda)，
 
 # how it works
 
