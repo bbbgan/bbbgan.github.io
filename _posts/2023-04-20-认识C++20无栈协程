@@ -1,0 +1,95 @@
+## 写在前面
+
+虽然C++20才开始慢慢支持协程，但是协程并不是一个新的概念，出现了好几十年，其他诸多语言比如*go*很早就支持协程了。
+
+> 协程分为无栈协程和有栈协程两种，无栈指可挂起/恢复的函数，有栈协程则相当于用户态线程。有栈协程切换的成本是用户态线程切换的成本，而无栈协程切换的成本则相当于函数调用的成本，C++20协程选择的是无栈协程。
+>
+> 无栈协程和线程的区别：无栈协程只能被线程调用，本身并不抢占内核调度，而线程则可抢占内核调度。协程的切换是用户决定的，不进入内核态
+
+#### why stackless coroutine
+
+有栈（stackful）协程通常的实现手段是在堆上提前分配一块较大的内存空间（比如 64K），也就是协程所谓的“栈”，参数、return address 等都可以存放在这个“栈”空间上。如果需要协程切换，那么通过 swapcontext 一类的形式来让系统认为这个堆上空间就是普通的栈，这就实现了上下文的切换。
+
+有栈协程最大的优势就是侵入性小，使用起来非常简便，已有的业务代码几乎不需要做什么修改，但是C++20最终还是选择了使用无栈协程，主要出于下面这几个方面的考虑。
+
+**栈空间的限制**
+
++ > 有栈协程的“栈”空间普遍是比较小的，在使用中有栈溢出的风险；而如果让“栈”空间变得很大，对内存空间又是很大的浪费。无栈协程则没有这些限制，既没有溢出的风险，也无需担心内存利用率的问题。
+
+**性能**
+
++ > 有栈协程在切换时确实比系统线程要轻量，但是和无栈协程相比仍然是偏重的，这一点虽然在我们目前的实际使用中影响没有那么大（异步系统的使用通常伴随了 IO，相比于切换开销多了几个数量级），但也决定了无栈协程可以用在一些更有意思的场景上。举个例子，C++20 coroutines 提案的作者 Gor Nishanov 在 CppCon 2018 上演示了无栈协程能做到纳秒级的切换，并基于这个特点实现了减少 Cache Miss 的特性。
+
+无栈协程是一个可以暂停和恢复的函数，是函数调用的泛化。为什么？我们知道一个函数的函数体(function body)是顺序执行的，执行完之后将结果返回给调用者，我们没办法挂起它并稍后恢复它，只能等待它结束。而无栈协程则允许我们把函数挂起，然后在任意需要的时刻去恢复并执行函数体，相比普通函数，协程的函数体可以挂起并在任意时刻恢复执行。所以，从这个角度来说，无栈协程是普通函数的泛化。
+
+![img](http://purecpp.cn/static/a06592d2b757498f821931a585f85141.png)
+
+## C++协程promise
+
+C++给协程提供了3个关键词，`co_await`、`co_yield`、`co_return`，C++的协程在形式上就是一个一个的函数，**如果函数这存在这3个关键词之一，并且协程的返回值应该是满足**一定要求的类型**。那么它就是一个协程**，之后编译器会为协程生成许多代码 实现一个协程状态机。
+
++ `co_await` 往往是一个协程的暂停点和恢复点
++ `co_yield` 是用来暂停协程并且往绑定的 `promise` 里面放入一个值.
++ `co_return` 是往绑定的 `promise` 里面放入一个值, 同时结束这个协程的.
+
+协程中还有一个重要的概念就是`promise`，每一个协程都会有一个promise，promise可以让用户自定义协程的一些行为，比如初始化协程应该会发生什么，协程结束的时候会发送什么，异常和调用yield的时候会发送什么。
+
+> 这里的`promise`和`std::future`那个没有什么特别的联系。
+
+当写一个协程的时候，编译器会把协程转换成以下的伪码。其中 `<body-statements>` 是我们的函数主体。
+
+```c++
+{
+  co_await promise.initial_suspend();
+  try
+  {
+    <body-statements>
+  }
+  catch (...)
+  {
+    promise.unhandled_exception();
+  }
+FinalSuspend:
+  co_await promise.final_suspend();
+}
+```
+
+在开始调用协程的时候，会按下面的顺序执行
+
++ 在堆上分配一个协程帧(coroutine frame)使用`operator new`（可以自定义）
++ 把函数的参数拷贝到协程帧里
++ 在协程帧里创建promise对象
++ 调用这个promise对象的get_return_object方法创建一个promise对象
++ 调用promise.get_return_object（）方法，以获得在协程首次挂起时返回给调用方的结果。将结果另存为局部变量。
++ 调用promise.initial_suspend（）方法并co-await结果。
++ 当co_await promise.initial_suspend（）表达式恢复（立即或异步）时，协程开始执行您编写的协程主体语句。
+
+当执行达到`co_return` 语句时，将执行一些附加步骤：
+
++ 调用promise.return_void（）或promise.return_value（＜expr＞）
++ 销毁所有局部变量，销毁顺序与创建顺序相反。
++ 调用promise.final_suspend（）并协同等待结果。
+
+相反，如果由于未处理的异常，执行留下`<body statements>`，则：
+
++ 捕获异常并从catch块中调用promise.unhandled_exception（）。
++ 调用promise.final_suspend（）并协同等待结果。
+
+一旦执行传播到协程主体之外，那么协程框架就会被破坏。销毁协同程序框架涉及多个步骤：
+
++ 调用promise对象的析构函数。
++ 调用函数参数副本的析构函数。
++ 调用操作符delete以释放协程框架使用的内存（可选）
++ 将执行转移回调用方/唤醒方。
+
+
+
+## reference
+
+[C++ Coroutines: Understanding the promise type | Asymmetric Transfer (lewissbaker.github.io)](https://lewissbaker.github.io/2018/09/05/understanding-the-promise-type)
+
+[**C++20 协程原理和应用**](http://purecpp.cn/detail?id=2288)
+
+[C++20 新特性 协程 Coroutines(1) - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/349210290)
+
+[C++20 新特性 协程 Coroutines(2) - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/349710180)
