@@ -1,10 +1,14 @@
+## TL;DR
+
+​	这篇文章是对协程概念的简单介绍，其中不包括例子`example`，建议搭配`reference`中的example进行单步调试。
+
 ## 写在前面
 
 虽然C++20才开始慢慢支持协程，但是协程并不是一个新的概念，出现了好几十年，其他诸多语言比如*go*很早就支持协程了。
 
 > 协程分为无栈协程和有栈协程两种，无栈指可挂起/恢复的函数，有栈协程则相当于用户态线程。有栈协程切换的成本是用户态线程切换的成本，而无栈协程切换的成本则相当于函数调用的成本，C++20协程选择的是无栈协程。
 >
-> 无栈协程和线程的区别：无栈协程只能被线程调用，本身并不抢占内核调度，而线程则可抢占内核调度。协程的切换是用户决定的，不进入内核态
+> 无栈协程和线程的区别：无栈协程只能被线程调用，本身并不抢占内核调度，而线程则可抢占内核调度。协程的切换是用户决定的，不进入内核态。
 
 #### why stackless coroutine
 
@@ -32,7 +36,7 @@ C++给协程提供了3个关键词，`co_await`、`co_yield`、`co_return`，C++
 + `co_yield` 是用来暂停协程并且往绑定的 `promise` 里面放入一个值.
 + `co_return` 是往绑定的 `promise` 里面放入一个值, 同时结束这个协程的.
 
-协程中还有一个重要的概念就是`promise`，每一个协程都会有一个promise，promise可以让用户自定义协程的一些行为，比如初始化协程应该会发生什么，协程结束的时候会发送什么，异常和调用yield的时候会发送什么。
+协程中还有一个重要的概念就是`promise`，每一个协程都会有一个*promise*，*promise*可以让用户自定义协程的一些行为，比如初始化协程应该会发生什么，协程结束的时候会发生什么，异常和调用*yield*的时候会发生什么。
 
 > 这里的`promise`和`std::future`那个没有什么特别的联系。
 
@@ -56,33 +60,31 @@ FinalSuspend:
 
 在开始调用协程的时候，会按下面的顺序执行
 
-+ 在堆上分配一个协程帧(coroutine frame)使用`operator new`（可以自定义）
++ 使用`operator new`在堆上分配一个协程帧(*coroutine frame*) `coroutine_handle`
 + 把函数的参数拷贝到协程帧里
-+ 在协程帧里创建promise对象
-+ 调用这个promise对象的get_return_object方法创建一个promise对象
-+ 调用promise.get_return_object（）方法，以获得在协程首次挂起时返回给调用方的结果。将结果另存为局部变量。
-+ 调用promise.initial_suspend（）方法并co-await结果。
-+ 当co_await promise.initial_suspend（）表达式恢复（立即或异步）时，协程开始执行您编写的协程主体语句。
++ 在协程帧里创建*promise*对象 promise对象的类型通过 `coroutine_handle<T>`中的T传递。
++ 调用这个*promise*对象的`get_return_object`方法创建一个*promise*对象
++ 调用`promise.get_return_object`方法，以获得在协程首次挂起时返回给调用方的结果。将结果另存为局部变量。
++ 调用`promise.initial_suspend`方法并`co_await`结果。
++ 当`co_await promise.initial_suspend`表达式`resume`（立即或异步）时，协程开始执行您编写的协程主体语句。
 
 当执行达到`co_return` 语句时，将执行一些附加步骤：
 
-+ 调用promise.return_void（）或promise.return_value（＜expr＞）
++ 调用`promise.return_void`或`promise.return_value`
 + 销毁所有局部变量，销毁顺序与创建顺序相反。
-+ 调用promise.final_suspend（）并协同等待结果。
++ 调用`promise.final_suspend`（）并`co_await`结果。
 
-相反，如果由于未处理的异常，执行留下`<body statements>`，则：
+相反，如果由于未处理的异常，则：
 
-+ 捕获异常并从catch块中调用promise.unhandled_exception（）。
-+ 调用promise.final_suspend（）并协同等待结果。
++ 捕获异常并从`catch`块中调用`promise.unhandled_exception`。
++ 调用`promise.final_suspend`（）并`co_await`结果。
 
 一旦执行传播到协程主体之外，那么协程框架就会被破坏。销毁协同程序框架涉及多个步骤：
 
-+ 调用promise对象的析构函数。
++ 调用*promise*对象的析构函数。
 + 调用函数参数副本的析构函数。
-+ 调用操作符delete以释放协程框架使用的内存（可选）
++ 调用操作符delete以释放协程框架使用的内存
 + 将执行转移回调用方/唤醒方。
-
-
 
 ## reference
 
