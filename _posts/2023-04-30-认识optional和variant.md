@@ -1,6 +1,6 @@
 ---
 layout: post
-title: 认识optional和variant
+title: 认识optional、variant以及tuple
 categories: [C++]
 description: 
 keywords: 
@@ -68,7 +68,8 @@ public:
 虽然bool类型通常只占用一个字节，但可选类型需要遵守对齐规则，因为真正的类型要大一点，具体取决于实现和包含的类型。
 
 ## std::tuple
-  std::tuple 取值赋值喝variant相似，可以简单的看做一个扩展的pair类型
+std::tuple是一种异质容器， 取值赋值喝variant相似，可以简单的看做一个扩展的pair类型。其析构函数是否是平凡的取决于容器中的类型是否都是平凡的析构函数。
+
 ## Reference
 
 [Everything You Need to Know About std::variant from C++17 - C++ Stories (cppstories.com)](https://www.cppstories.com/2018/06/variant/)
