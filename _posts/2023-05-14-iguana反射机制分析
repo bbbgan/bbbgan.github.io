@@ -1,0 +1,225 @@
+---
+layout: post
+title: iguana反射机制分析
+categories: [C++, 反射]
+description:
+keywords:
+---
+
+#### 引言
+
+众所周知，C++是不支持反射的，这篇文章分析一下[iguana](https://github.com/qicosmos/iguana)序列化引擎的反射机制。iguana的反射的是结构体的字段，这篇文章通过一个小例子来看如何实现的反射机制。
+
+> iguana是一个支持xml、yaml、json的通用序列化引擎
+
+## 注册字段
+
+*iguana*反射首先需要利用宏 `Reflection` 手动注册字段：
+
+```c++
+struct person {
+    std::string name;
+    std::string age
+};
+REFLECTION(person, name, age)
+```
+
+`REFLECTION`宏定义最终会expand成以下的代码：
+
+```c++
+constexpr inline std::array<frozen::string, 2> arr_person = {
+    std::string_view("name", sizeof("name") - 1),
+    std::string_view("age", sizeof("age") - 1)};
+inline auto iguana_reflect_members(person const &) {
+  struct reflect_members {
+    constexpr decltype(auto) static apply_impl() {
+      return std::make_tuple(&person::name, &person::age);
+    }
+    using size_type = std::integral_constant<size_t, 2>;
+    constexpr static std::string_view name() {
+      return std::string_view("person", sizeof("person") - 1);
+    }
+    constexpr static size_t value() { return size_type::value; }
+    constexpr static std::array<frozen::string, size_type::value> arr() {
+      return arr_person;
+    }
+  };
+  return reflect_members{};
+}
+```
+
+下面逐步分析如何实现的该宏，首先宏定义如下，因此最终的行为由 `MAKE_META_DATA`实现
+
+```c++
+#define REFLECTION(STRUCT_NAME, ...)                                           \
+  MAKE_META_DATA(STRUCT_NAME, GET_ARG_COUNT(__VA_ARGS__), __VA_ARGS__)
+```
+
+这里首先分析一下宏 `GET_ARG_COUNT`，从名字可以看出，这是一个获取参数个数的宏，他的实现方法也比较常见，我下面举一个例子说明即可。
+
+#### **GET_ARG_COUNT** 
+
+```c++
+#define ARG_N(_1, _2, _3, _4, _5, N, ...)   N
+#define GET_ARG_COUNT(...) ARG_N(__VA_ARGS__, 5, 4, 3, 2, 1, 0)
+```
+
+其中例如_1是一个占位符，它用于表示一个参数位置，但在宏调用时，不会显示出来，而是由宏展开时的参数列表来对应。
+
+这里就举例前面的*person*结构来说明 `GET_ARG_COUNT(name, age) `会被扩展成以下的内容
+
+```
+ARG_N(name, age, 5, 4, 3, 2, 1, 0) 
+```
+
+而这个宏的结构是 N， N对应第6个参数，即宏的结果是2，也就是参数的个数。这里的代码简化了，意在说明其原理。
+
+#### **MAKE_META_DATA**
+
+然后正式进入对 反射机制的分析，`MAKE_META_DATA`宏定义如下：
+
+```c++
+#define MAKE_META_DATA(STRUCT_NAME, N, ...)                                    \
+  constexpr inline std::array<frozen::string, N> arr_##STRUCT_NAME = {         \
+      MARCO_EXPAND(MACRO_CONCAT(CON_STR, N)(__VA_ARGS__))};                    \
+  MAKE_META_DATA_IMPL(STRUCT_NAME,                                             \
+                      MAKE_ARG_LIST(N, &STRUCT_NAME::FIELD, __VA_ARGS__))
+```
+
+可以最开始宏的展开结果进行比较,
+
+```c++
+MARCO_EXPAND(MACRO_CONCAT(CON_STR, N)(__VA_ARGS__))
+//扩展为
+std::string_view("name", sizeof("name") - 1),
+std::string_view("age", sizeof("age") - 1)
+```
+
+**还是以最开始的例子为例，一步一步的分析如何获得的。首先宏应该从内展开 `MACRO_CONCAT(CON_STR, N) `**，下面是宏的定义：
+
+```c++
+// 宏的定义
+#define MACRO_CONCAT(A, B) MACRO_CONCAT1(A, B)
+#define MACRO_CONCAT1(A, B) A##_##B
+```
+
+宏的结果是一个字符串 CON_STR_N,其中N是参数的个数，因此是 `CON_STR_2`。这也是一个宏，把下面的宏进行扩展我们就得到了想要的string_view字符串。
+
+```c++
+#define ADD_VIEW(str) std::string_view(#str, sizeof(#str) - 1)
+#define SEPERATOR ,
+#define CON_STR_1(element, ...) ADD_VIEW(element)
+#define CON_STR_2(element, ...)                                                \
+  ADD_VIEW(element) SEPERATOR MARCO_EXPAND(CON_STR_1(__VA_ARGS__))
+```
+
+**其次是对 `MAKE_ARG_LIST(N, &STRUCT_NAME::FIELD, __VA_ARGS__)`的分析**，该宏定义如下：
+
+```c++
+#define MAKE_ARG_LIST(N, op, arg, ...)                                         \
+  MACRO_CONCAT(MAKE_ARG_LIST, N)(op, arg, __VA_ARGS__)
+```
+
+和前面的一样，这个宏也使用了 `MACRO_CONCAT`根据参数的不同调用不同的宏 这里调用如下宏：
+
+```c++
+#define MAKE_ARG_LIST_1(op, arg, ...) op(arg)
+#define MAKE_ARG_LIST_2(op, arg, ...)                                          \
+  op(arg), MARCO_EXPAND(MAKE_ARG_LIST_1(op, __VA_ARGS__))
+```
+
+其中的op其实就是 `&STRUCT_NAME::FIELD`，定义如下，因此  `&STRUCT_NAME::FIELD`变成  `&person::name`，完成了对结构体指针的反射
+
+```
+#define FIELD(t) t
+```
+
+**接下来是宏 `MAKE_META_DATA_IMPL`**，他的定义如下：
+
+```c++
+#define MAKE_META_DATA_IMPL(STRUCT_NAME, ...)                                  \
+  inline auto iguana_reflect_members(STRUCT_NAME const &) {                    \
+    struct reflect_members {                                                   \
+      constexpr decltype(auto) static apply_impl() {                           \
+        return std::make_tuple(__VA_ARGS__);                                   \
+      }                                                                        \
+      using size_type =                                                        \
+          std::integral_constant<size_t, GET_ARG_COUNT(__VA_ARGS__)>;          \
+      constexpr static std::string_view name() {                               \
+        return std::string_view(#STRUCT_NAME, sizeof(#STRUCT_NAME) - 1);       \
+      }                                                                        \
+      constexpr static size_t value() { return size_type::value; }             \
+      constexpr static std::array<frozen::string, size_type::value> arr() {    \
+        return arr_##STRUCT_NAME;                                              \
+      }                                                                        \
+    };                                                                         \
+    return reflect_members{};                                                  \
+  }
+```
+
+这就对应了刚开始的膨胀代码，其实还是很简单的，基本上这里的代码都是一一对应，没什么好说的。至此我们完成了反射的注册。
+
+接下来是这个反射我们该如何使用？
+
+## 使用反射
+
+使用反射大概有2种方法，一种是返回一个哈希表，key是结构体字段的名字，value是一个variant，里面对应该字段的结构体指针。
+
+```c++
+static constexpr auto frozen_map = get_iguana_struct_map<T>();
+```
+
+`get_iguana_struct_map`定义如下：
+
+```c++
+template <typename T> inline constexpr auto get_iguana_struct_map() {
+  using reflect_members = decltype(iguana_reflect_members(std::declval<T>()));
+  if constexpr (reflect_members::value() == 0) {
+    return std::array<int, 0>{};
+  } else {
+    return detail::get_iguana_struct_map_impl(
+        reflect_members::arr(), reflect_members::apply_impl(),
+        std::make_index_sequence<reflect_members::value()>{});
+  }
+}
+```
+
+最终行为由 `get_iguana_struct_map_impl`实现，定义如下：
+
+```c++
+template <typename T, size_t... Is>
+inline constexpr auto
+get_iguana_struct_map_impl(const std::array<frozen::string, sizeof...(Is)> &arr,
+                           T &&t, std::index_sequence<Is...>) {
+  using ValueType = decltype(get_value_type(t));
+  return frozen::unordered_map<frozen::string, ValueType, sizeof...(Is)>{
+      {filter_str(arr[Is]),
+       ValueType{std::in_place_index<Is>, std::get<Is>(t)}}...};
+}
+```
+
+其中 `frozen::unordered_map`是由第三方库实现的，是一个编译期哈希表，实现了完美哈希。
+
+第二种方法就是利用 `for_each遍历结构体的字段`
+
+用法可以参考iguana的 **顺序解析部分**：以下是实现的代码，这里基本没什么宏的关系，熟悉一下模板元编程就很容易看懂了。
+
+```c++
+template <typename... Args, typename F, std::size_t... Idx>
+constexpr void for_each(const std::tuple<Args...> &t, F &&f,
+                        std::index_sequence<Idx...>) {
+  (std::forward<F>(f)(std::get<Idx>(t), std::integral_constant<size_t, Idx>{}),
+   ...);
+}
+
+template <typename T, typename F>
+constexpr std::enable_if_t<is_reflection<T>::value> for_each(T &&t, F &&f) {
+  using M = decltype(iguana_reflect_members(std::forward<T>(t)));
+  for_each(M::apply_impl(), std::forward<F>(f),
+           std::make_index_sequence<M::value()>{});
+}
+```
+
+## 总结
+
+*iguana*的反射的重点是获取结构体字段的名字和结构体指针。首先获取参数的个数，然后根据参数的个数选择指定的宏来获取结构体字段的字符串数组。在获取结构体指针的时候，也是类似的做法。需要注意的是，虽然C++也支持编译期计算，但是宏的替换是在这之前的。
